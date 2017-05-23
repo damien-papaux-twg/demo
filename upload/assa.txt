@@ -1,0 +1,94 @@
+let http = require('http');
+
+Meteor.methods({
+
+
+    getWorkableIndividuals: function () {
+
+        var proxyUrl = 'https://cors-anywhere.herokuapp.com/';
+        var urlCand = 'http://www.workable.com';
+        var pathCand = '/spi/v3/accounts/thisway/candidates/';
+
+        var optionsIndi = {
+            host: 'workable.com',
+            path: '/spi/v3/accounts/thisway/candidates/',
+            //method: 'GET',
+            //This is the only line that is new. `headers` is an object with the headers to request
+            headers: {'Authorization': 'Bearer 66831b639e2a8df586813469a7f856094899d934a090d3b997fed0d29e5d43bb'}
+        };
+
+
+        var reqIndi = http.get(optionsIndi, Meteor.bindEnvironment(function (res) {
+            var strCand = '';
+            res.on('data', function (chunk) {
+                strCand += chunk;
+
+            });
+
+            res.on('end', function () {
+
+
+                var textCand = strCand;
+                console.log(JSON.parse(textCand));
+                let candidatesObj = JSON.parse(textCand);
+
+                if (candidatesObj.candidates) {
+                    let candidatesS = candidatesObj.candidates;
+
+                    candidatesS.forEach(function (obj) {
+
+                        var urlJob = 'http://www.workable.com';
+                        var pathJob = '/spi/v3/accounts/thisway/jobs/' + obj.job.shortcode;
+
+                        var optionsJobs = {
+                            host: 'workable.com',
+                            path: '/spi/v3/accounts/thisway/jobs/' + obj.job.shortcode,
+                            //method: 'GET',
+                            //This is the only line that is new. `headers` is an object with the headers to request
+                            headers: {'Authorization': 'Bearer 66831b639e2a8df586813469a7f856094899d934a090d3b997fed0d29e5d43bb'}
+                        };
+                        var reqJob = http.get(optionsJobs, Meteor.bindEnvironment(function (res) {
+                            var strJob = '';
+                            res.on('data', function (chunk) {
+                                strJob += chunk;
+                            });
+
+                            res.on('end', function () {
+
+                                //xhrJob.onload = function () {
+                                var textJob = strJob;
+                                let jobJSON = JSON.parse(textJob);
+                                var jobID = jobJSON.code;
+                                var businessID = null;
+                                var indi;
+                                if (jobID) {
+                                    let job = Collections.get("Jobs").findOne({"id": jobID});
+                                    businessID = job.businessId;
+                                }
+                                if (businessID) {
+                                    indi = parseWorkableIndividual(obj, jobID, businessID);
+                                } else {
+                                    indi = parseWorkableIndividual(obj);
+                                }
+
+                                let alreadyInDb = Collections.get("Individuals").findOne({"workableImportId": indi.workableImportId});
+
+                                if (!alreadyInDb) {
+                                    conole.log('########################');
+                                    Individuals.insert(indi);
+                                }
+                            });
+                        }));
+                        reqJob.end();
+
+                    });
+                }
+            });
+
+
+            //var title = getTitle(text);
+            //alert('Response from CORS request to ' + url + ': ');
+        }));
+        reqIndi.end();
+    }
+});

@@ -1,0 +1,361 @@
+/*
+ * To change this license header, choose License Headers in Project Properties.
+ * To change this template file, choose Tools | Templates
+ * and open the template in the editor.
+ */
+
+function createCORSRequest(method, url) {
+    var xhr = new XMLHttpRequest();
+
+    if ("withCredentials" in xhr) {
+
+        // Check if the XMLHttpRequest object has a "withCredentials" property.
+        // "withCredentials" only exists on XMLHTTPRequest2 objects.
+        xhr.open(method, url, true);
+        xhr.setRequestHeader('Authorization', 'Bearer 66831b639e2a8df586813469a7f856094899d934a090d3b997fed0d29e5d43bb');
+
+    } else if (typeof XDomainRequest != "undefined") {
+
+        // Otherwise, check if XDomainRequest.
+        // XDomainRequest only exists in IE, and is IE's way of making CORS requests.
+        xhr = new XDomainRequest();
+        xhr.open(method, url);
+        xhr.setRequestHeader('Authorization', 'Bearer 66831b639e2a8df586813469a7f856094899d934a090d3b997fed0d29e5d43bb');
+
+    } else {
+
+        // Otherwise, CORS is not supported by the browser.
+        xhr = null;
+
+    }
+    return xhr;
+}
+
+Meteor.methods({
+
+
+    getWorkableIndividuals: function() {
+
+        var proxyUrl = 'https://cors-anywhere.herokuapp.com/';
+        var urlCand = 'https://www.workable.com/spi/v3/accounts/thisway/candidates/';
+        //var xhrCand = Meteor.call('createCORSRequest', {method: 'GET', url: proxyUrl + urlCand});
+        var xhrCand = createCORSRequest("GET", proxyUrl+urlCand);
+        if (!xhrCand) {
+            throw new Error('CORS not supported cand');
+        }
+
+        xhrCand.onload = function () {
+            var textCand = xhrCand.responseText;
+            console.log(JSON.parse(textCand));
+            let candidatesObj = JSON.parse(textCand);
+
+            if (candidatesObj.candidates) {
+                let candidatesS = candidatesObj.candidates;
+
+                candidatesS.forEach(function (obj) {
+
+                    var urlJob = 'https://www.workable.com/spi/v3/accounts/thisway/jobs/' + obj.job.shortcode;
+                    //var xhrJob = Meteor.call('createCORSRequest', {method: 'GET', url: proxyUrl + urlJob});
+                    var xhrJob = createCORSRequest("GET", proxyUrl+urlJob);
+                    if (!xhrJob) {
+                        throw new Error('CORS not supported jobs');
+                    }
+                    xhrJob.onload = function () {
+                        var textJob = xhrJob.responseText;
+                        let jobJSON = JSON.parse(textJob);
+                        var jobID = jobJSON.code;
+                        var businessID = null;
+                        var indi;
+                        if (jobID) {
+                            let job = Collections.get("Jobs").findOne({"id": jobID});
+                            businessID = job.businessId;
+                        }
+                        if (businessID) {
+                            indi = parseWorkableIndividual(obj, jobID, businessID);
+                        } else {
+                            indi = parseWorkableIndividual(obj);
+                        }
+
+                        let alreadyInDb = Collections.get("Individuals").findOne({"workableImportId": indi.workableImportId});
+
+                        if (!alreadyInDb) {
+                            conole.log('########################');
+                            Individuals.insert(indi);
+                        }
+                    };
+                    xhrJob.onerror = function () {
+                        alert('Woops, there was an error making the request.');
+                    };
+                    //let idImportInDatabase = Collections.get("Individuals").findOne({"workableImportId": obj.id});
+
+                    //if (!idImportInDatabase) {
+                    //console.log("###############################");
+                    //console.log(JSON.stringify(indi));
+                    //}
+                });
+            }
+
+
+            //var title = getTitle(text);
+            //alert('Response from CORS request to ' + url + ': ');
+        };
+
+        xhrCand.onerror = function () {
+            alert('Woops, there was an error making the request.');
+        };
+        xhrCand.send();
+    },
+});
+
+function parseWorkableIndividual(workableIndividualJSON, jobId, businessId) {
+    try {
+        //console.log(candidatesObj);
+        //console.log(people);
+
+        //people.forEach(function (objPeople) {
+        let pers = workableIndividualJSON;
+        let returnData = {};
+
+        if (pers.id) {
+            returnData.workableImportId = pers.id;
+        }
+
+        let name = {};
+
+        if (pers.firstname) {
+            name.first = pers.firstname;
+        }
+        if (pers.lastname) {
+            name.last = pers.lastname;
+        }
+
+        returnData.name = name;
+
+
+        if (pers.created_at) {
+            returnData.created_at = pers.created_at;
+        }
+
+        if (pers.image_url) {
+            let pics = {};
+            pics.type = "bio";
+            pics.url = pers.image_url;
+            returnData.pics = [pics];
+        }
+
+        if (pers.skills) {
+            let nameSkills = [];
+            let skills = pers.skills;
+            skills.forEach(function (obj) {
+                if (obj.name) {
+                    let skillInDB = Collections.get("Skills").findOne({"name.name": obj.name});
+                    let ret;
+                    if (skillInDB) {
+                        if (skillInDB._id) {
+                            ret = {skillID: skillInDB._id, name: obj.name, level: 5};
+                        } else {
+                            ret = {name: obj.name, level: 5};
+                        }
+                    } else {
+                        ret = {name: obj.name, level: 5};
+                    }
+                    nameSkills.push(ret);
+                }
+            });
+            if (_.isArray(nameSkills)) {
+                returnData.skills = nameSkills;
+            }
+        }
+
+
+        let bio = "";
+        if (pers.summary) {
+            bio = pers.summary;
+        }
+
+        if (pers.cover_letter) {
+            if (bio === "") {
+                bio = pers.cover_letter;
+            } else {
+                bio += "\\n\\n";
+                bio += pers.cover_letter;
+            }
+        }
+        if (bio) {
+            returnData.bio = bio;
+        }
+
+
+        if (pers.education_entries) {
+            let eduArray = [];
+            let education_entries = pers.education_entries || [];
+
+            education_entries.forEach(function (obj) {
+                    let degreeEducationObj = Collections.get("DegreeTypes").findOne({"name.name": obj.degree});
+
+                    let eduData = {};
+
+                    if (degreeEducationObj) {
+                        eduData.degree = degreeEducationObj._id;
+                    }
+
+                    if (obj.school) {
+                        eduData.name = obj.school;
+                    } else {
+                        eduData.name = "NOT DEFINED";
+                    }
+
+                    if (obj.field_of_study) {
+                        eduData.subject = obj.field_of_study;
+                    }
+                    if (obj.start_date) {
+                        eduData.start = obj.start_date;
+                    }
+                    if (obj.end_date) {
+                        eduData.end = obj.end_date;
+                    }
+
+                    if (eduData) {
+                        eduArray.push(eduData);
+                    }
+                }
+            );
+            if (_.isArray(eduArray)) {
+                returnData.education = eduArray;
+            }
+        }
+
+        if (pers.headline) {
+            returnData.headline = pers.headline;
+        }
+        if (pers.email) {
+            returnData.email = pers.email;
+        }
+        if (pers.summary) {
+            returnData.summary = pers.summary;
+        }
+        if (pers.address) {
+            returnData.textLocation = pers.address;
+        }
+
+        if (pers.answers) {
+            let othersArray = [];
+            let answers = pers.answers;
+            answers.forEach(function (obj) {
+                let otherBean = {};
+                if (obj.question.body) {
+                    otherBean.name = obj.question.body;
+
+                    if (obj.answer.body) {
+                        otherBean.desc = obj.answer.body;
+                    }
+                    else if (obj.answer.checked === true || obj.answer.checked === false) {
+                        otherBean.desc = (obj.answer.checked ? "Yes" : "No");
+                    }
+                    else {
+                        otherBean.desc = JSON.stringify(obj.answer);
+                    }
+                    if (otherBean) {
+                        othersArray.push(otherBean);
+                    }
+                }
+            });
+            if (_.isArray(othersArray)) {
+                returnData.other = othersArray;
+            }
+        }
+
+        if (pers.social_profiles) {
+            let socialArray = [];
+            let social_profiles = pers.social_profiles;
+            let allSocialPlatforms = Collections.get("SocialPlatforms").find().fetch();
+            social_profiles.forEach(function (obj) {
+                allSocialPlatforms.forEach(function (objS) {
+                    if (objS.name.toLowerCase() === obj.name.toLowerCase()) {
+                        let socialProfile = {};
+                        socialProfile.platformID = objS.name;
+
+                        if (obj.url) {
+                            socialProfile.url = obj.url;
+                        }
+                        if (obj.username) {
+                            socialProfile.id = obj.username;
+                        }
+                        if (socialProfile) {
+                            socialArray.push(socialProfile);
+                        }
+                    }
+                });
+            });
+            if (_.isArray(socialArray)) {
+                returnData.socialMedia = socialArray;
+            }
+        }
+
+        if (pers.phone) {
+            returnData.phone = pers.phone;
+        }
+
+        if (pers.experience_entries) {
+            let exArray = [];
+            let experience_entries = pers.experience_entries;
+            experience_entries.forEach(function (obj) {
+                let exBean = {};
+                let jobRoleObj = Collections.get("JobRoles").findOne({"name.name": obj.title});
+                if (jobRoleObj) {
+                    if (jobRoleObj._id) {
+                        exBean.jobRoles = [jobRoleObj._id];
+                    }
+                }
+
+                if (obj.title) {
+                    exBean.title = obj.title;
+
+                    if (obj.company) {
+                        exBean.company = obj.company;
+                    } else {
+                        exBean.company = "NOT DEFINED";
+                    }
+                    if (obj.summary) {
+                        exBean.desc = obj.summary;
+                    }
+                    if (obj.start_date) {
+                        let date = {
+                            year: new Date(Date.parse(obj.start_date).getFullYear()),
+                            month: new Date(Date.parse(obj.start_date).getMonth()) + 1,
+                            day: new Date(Date.parse(obj.start_date).getDay()),
+                        };
+                        exBean.start = date;
+                    }
+                    if (obj.end_date) {
+                        let date = {
+                            year: new Date(Date.parse(obj.end_date).getFullYear()),
+                            month: new Date(Date.parse(obj.end_date).getMonth()) + 1,
+                            day: new Date(Date.parse(obj.end_date).getDay()),
+                        };
+                        exBean.end = date;
+                    }
+                    if (exBean) {
+                        exArray.push(exBean);
+                    }
+                }
+            });
+            if (_.isArray(exArray)) {
+                returnData.workExperience = exArray;
+            }
+        }
+        if (jobId && businessId) {
+            let application = {};
+            application.jobId = jobId;
+            application.businessId = businessId;
+            application.date = new Date();
+            application.state = Applications.ApplicationStates.applied.value;
+            returnData.applications = [application];
+        }
+
+
+        return returnData;
+    } catch (e) {
+        App.debug.error(e.message)
+    }
+}
